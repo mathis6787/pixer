@@ -5,6 +5,7 @@ import 'backend_native.dart'
 import 'enums.dart';
 import 'image_metadata.dart';
 import 'image_operation.dart';
+import 'image_probe.dart';
 import 'pixer_encoder.dart';
 import 'pixer_exception.dart';
 
@@ -84,6 +85,16 @@ final class Pixer {
     }
     throw UnsupportedFormatException('input: memory');
   }
+
+  /// Reads an encoded image's format, dimensions, and frame count without
+  /// decoding its pixels or loading the native/WASM engine.
+  ///
+  /// Supports PNG, JPEG, GIF, and WebP. This validates container structure,
+  /// not compressed pixel data; [Pixer.fromMemory] performs full decoding.
+  /// Throws [UnsupportedFormatException] for other formats,
+  /// [DecodingException] for malformed headers, or
+  /// [InvalidDimensionsException] for zero dimensions.
+  static PixerImageHeader probe(Uint8List bytes) => probeImageHeader(bytes);
 
   /// Loads an image from a file path
   ///

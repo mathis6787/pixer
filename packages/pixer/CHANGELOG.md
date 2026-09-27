@@ -1,6 +1,7 @@
 ## Unreleased
 
 - Added `Pixer.guessFormat` for detecting supported image formats from encoded bytes on native and web.
+- Added `Pixer.probe` to inspect PNG, JPEG, GIF, and WebP format, dimensions, and frame count without decoding pixels.
 
 ## 0.0.10
 
