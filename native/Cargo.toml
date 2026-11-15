@@ -8,13 +8,22 @@ name = "pixer"
 crate-type = ["staticlib", "cdylib"]
 
 [dependencies]
-libc = "0.2.177"
+image = { version = "0.25.5", default-features = false }
+fast_image_resize = "6.1.0"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-image = "0.25.5"
+fast_image_resize = { version = "6.1.0", features = ["rayon"] }
 
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-image = { version = "0.25.5", default-features = false, features = ["bmp", "gif", "ico", "jpeg", "png", "tiff", "webp"] }
+# Keep in sync with `supportedFormats` in packages/pixer/lib/src/hook/local_build.dart.
+[features]
+default = ["bmp", "gif", "ico", "jpeg", "png", "tiff", "webp"]
+bmp = ["image/bmp"]
+gif = ["image/gif"]
+ico = ["image/ico"]
+jpeg = ["image/jpeg"]
+png = ["image/png"]
+tiff = ["image/tiff"]
+webp = ["image/webp"]
 
 [profile.release]
 opt-level = 3

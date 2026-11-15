@@ -36,6 +36,43 @@ final _animatedWebp = _fixture(
 );
 
 void main() {
+  group('Pixer.guessFormat', () {
+    for (final (format, bytes) in [
+      (ImageFormatEnum.Png, _png),
+      (ImageFormatEnum.Jpeg, _jpegHeader),
+      (ImageFormatEnum.Gif, _gif),
+      (ImageFormatEnum.WebP, _webp),
+      (ImageFormatEnum.Bmp, Uint8List.fromList([0x42, 0x4d])),
+      (ImageFormatEnum.Ico, Uint8List.fromList([0, 0, 1, 0])),
+      (ImageFormatEnum.Tiff, Uint8List.fromList([0x49, 0x49, 0x2a, 0])),
+      (ImageFormatEnum.Tiff, Uint8List.fromList([0x4d, 0x4d, 0, 0x2a])),
+    ]) {
+      test('recognizes ${format.name} signatures without decoding', () {
+        expect(Pixer.guessFormat(bytes), format);
+      });
+    }
+
+    test('does not treat a recognized signature as image validation', () {
+      expect(
+        Pixer.guessFormat(Uint8List.sublistView(_png, 0, 8)),
+        ImageFormatEnum.Png,
+      );
+    });
+
+    test('rejects empty, unknown and incomplete signatures', () {
+      for (final bytes in [
+        Uint8List(0),
+        utf8.encode('<svg/>'),
+        _png.sublist(0, 4),
+      ]) {
+        expect(
+          () => Pixer.guessFormat(Uint8List.fromList(bytes)),
+          throwsA(isA<UnsupportedFormatException>()),
+        );
+      }
+    });
+  });
+
   group('Pixer.probe', () {
     for (final (format, bytes) in [
       (ImageFormatEnum.Png, _png),
@@ -49,6 +86,29 @@ void main() {
         expect((header.width, header.height, header.frameCount), (2, 3, 1));
       });
     }
+
+    test('keeps encoded JPEG dimensions before EXIF orientation', () {
+      final exif = <int>[
+        0x45, 0x78, 0x69, 0x66, 0, 0, // Exif signature.
+        0x49, 0x49, 0x2a, 0, 8, 0, 0, 0, // Little-endian TIFF header.
+        1, 0, // One IFD entry.
+        0x12, 0x01, 3, 0, 1, 0, 0, 0, 6, 0, 0, 0, // Rotate 90 degrees.
+        0, 0, 0, 0, // No next IFD.
+      ];
+      final withExif = Uint8List.fromList([
+        ..._jpegHeader.take(2),
+        0xff,
+        0xe1,
+        0,
+        exif.length + 2,
+        ...exif,
+        ..._jpegHeader.skip(2),
+      ]);
+
+      final header = Pixer.probe(withExif);
+      expect((header.width, header.height, header.frameCount), (2, 3, 1));
+      expect(Pixer.guessFormat(withExif), ImageFormatEnum.Jpeg);
+    });
 
     test('reads lossy and extended still WebP containers', () {
       for (final bytes in [_lossyWebp, _extendedWebp]) {

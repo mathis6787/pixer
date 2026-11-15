@@ -6,6 +6,7 @@ import 'pixer_exception.dart';
 /// Container information read from encoded image bytes without decoding pixels.
 ///
 /// [frameCount] counts displayed frames. A still image has one frame.
+/// Dimensions describe the encoded canvas before applying EXIF orientation.
 final class PixerImageHeader {
   const PixerImageHeader._({
     required this.format,
@@ -17,10 +18,10 @@ final class PixerImageHeader {
   /// The image container format.
   final ImageFormatEnum format;
 
-  /// Canvas width in pixels.
+  /// Encoded canvas width in pixels, before EXIF orientation.
   final int width;
 
-  /// Canvas height in pixels.
+  /// Encoded canvas height in pixels, before EXIF orientation.
   final int height;
 
   /// Number of displayed frames.

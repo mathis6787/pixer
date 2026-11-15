@@ -9,6 +9,7 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  image: ^4.8.0
   pixer:
     path: ../pixer
 
@@ -26,3 +27,6 @@ hooks:
   user_defines:
     pixer:
       local_build: true
+      formats:
+        - png
+        - jpeg
