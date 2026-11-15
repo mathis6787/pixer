@@ -1,5 +1,7 @@
 ## Unreleased
 
+- **Breaking:** `Pixer.probe` dimensions now account for EXIF orientation, matching `Pixer.fromMemory`. The header exposes `orientation` and `needsOrientationTransform` without decoding pixels; invalid or missing EXIF defaults to no transform.
+
 - Added `Pixer.guessFormat` for detecting supported image formats from encoded bytes on native and web.
 - Added `Pixer.probe` to inspect PNG, JPEG, GIF, and WebP format, dimensions, and frame count without decoding pixels.
 

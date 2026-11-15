@@ -6,26 +6,36 @@ import 'pixer_exception.dart';
 /// Container information read from encoded image bytes without decoding pixels.
 ///
 /// [frameCount] counts displayed frames. A still image has one frame.
-/// Dimensions describe the encoded canvas before applying EXIF orientation.
+/// Dimensions account for EXIF orientation, matching `Pixer.fromMemory`.
 final class PixerImageHeader {
   const PixerImageHeader._({
     required this.format,
     required this.width,
     required this.height,
     required this.frameCount,
+    required this.orientation,
   });
 
   /// The image container format.
   final ImageFormatEnum format;
 
-  /// Encoded canvas width in pixels, before EXIF orientation.
+  /// Width in pixels after applying EXIF orientation.
   final int width;
 
-  /// Encoded canvas height in pixels, before EXIF orientation.
+  /// Height in pixels after applying EXIF orientation.
   final int height;
 
   /// Number of displayed frames.
   final int frameCount;
+
+  /// EXIF orientation (1–8), or 1 when absent, invalid, or unreadable.
+  ///
+  /// Values 2–8 require a rotation, a mirror, or both. Reading this value does
+  /// not transform the encoded bytes or decode pixels.
+  final int orientation;
+
+  /// Whether decoding applies a rotation or mirror to the encoded pixels.
+  bool get needsOrientationTransform => orientation != 1;
 }
 
 PixerImageHeader probeImageHeader(Uint8List bytes) {
@@ -52,6 +62,28 @@ final class _ImageProbe {
 
   final Uint8List bytes;
   final ByteData view;
+
+  static final _pngCrcTable = Uint32List.fromList([
+    for (var value = 0; value < 256; value++) _pngCrcEntry(value),
+  ]);
+
+  static int _pngCrcEntry(int value) {
+    var crc = value;
+    for (var bit = 0; bit < 8; bit++) {
+      crc = (crc & 1) != 0 ? (crc >>> 1) ^ 0xedb88320 : crc >>> 1;
+    }
+    return crc;
+  }
+
+  bool validPngExifCrc(int typeOffset, int dataEnd) {
+    // png ignores ancillary metadata with a bad CRC. Only check eXIf: this
+    // probe still does not validate image data or unrelated chunk checksums.
+    var crc = 0xffffffff;
+    for (var offset = typeOffset; offset < dataEnd; offset++) {
+      crc = (crc >>> 8) ^ _pngCrcTable[(crc ^ bytes[offset]) & 0xff];
+    }
+    return (crc ^ 0xffffffff) == u32be(dataEnd);
+  }
 
   bool matches(List<int> signature, [int offset = 0]) {
     if (offset > bytes.length - signature.length) return false;
@@ -101,8 +133,9 @@ final class _ImageProbe {
     ImageFormatEnum format,
     int width,
     int height,
-    int frameCount,
-  ) {
+    int frameCount, {
+    int orientation = 1,
+  }) {
     if (width == 0 || height == 0) {
       throw InvalidDimensionsException('encoded image has zero dimensions');
     }
@@ -111,10 +144,40 @@ final class _ImageProbe {
     }
     return PixerImageHeader._(
       format: format,
-      width: width,
-      height: height,
+      width: orientation >= 5 ? height : width,
+      height: orientation >= 5 ? width : height,
       frameCount: frameCount,
+      orientation: orientation,
     );
+  }
+
+  int exifOrientation(int start, int length) {
+    // image-rs reads TIFF IFD0 directly. Ignore malformed metadata just as its
+    // orientation reader does, while container bounds remain validated above.
+    if (length < 8) return 1;
+    final Endian endian;
+    if (matches(const [0x49, 0x49, 42, 0], start)) {
+      endian = Endian.little;
+    } else if (matches(const [0x4d, 0x4d, 0, 42], start)) {
+      endian = Endian.big;
+    } else {
+      return 1;
+    }
+    final ifd = view.getUint32(start + 4, endian);
+    if (ifd > length - 2) return 1;
+    final entries = view.getUint16(start + ifd, endian);
+    var entry = start + ifd + 2;
+    final end = start + length;
+    for (var index = 0; index < entries; index++, entry += 12) {
+      if (entry > end - 12) return 1;
+      if (view.getUint16(entry, endian) == 0x0112 &&
+          view.getUint16(entry + 2, endian) == 3 &&
+          view.getUint32(entry + 4, endian) == 1) {
+        final value = view.getUint16(entry + 8, endian);
+        return value >= 1 && value <= 8 ? value : 1;
+      }
+    }
+    return 1;
   }
 
   PixerImageHeader png() {
@@ -124,6 +187,8 @@ final class _ImageProbe {
     int? declaredFrames;
     var frameControls = 0;
     var hasImageData = false;
+    var hasExif = false;
+    var orientation = 1;
     var ended = false;
 
     while (offset < bytes.length) {
@@ -155,6 +220,15 @@ final class _ImageProbe {
               throw DecodingException('invalid PNG frame control');
             }
             frameControls++;
+          case 'eXIf':
+            // Pixer asks for orientation before decoding pixels, when the PNG
+            // decoder has only read metadata preceding the first IDAT chunk.
+            if (!hasExif &&
+                !hasImageData &&
+                validPngExifCrc(offset + 4, data + length)) {
+              orientation = exifOrientation(data, length);
+              hasExif = true;
+            }
           case 'IDAT':
             hasImageData = true;
           case 'IEND':
@@ -173,11 +247,20 @@ final class _ImageProbe {
     if (declaredFrames != null && frameControls != declaredFrames) {
       throw DecodingException('PNG frame count does not match animation data');
     }
-    return header(ImageFormatEnum.Png, width, height, declaredFrames ?? 1);
+    return header(
+      ImageFormatEnum.Png,
+      width,
+      height,
+      declaredFrames ?? 1,
+      orientation: orientation,
+    );
   }
 
   PixerImageHeader jpeg() {
     var offset = 2;
+    int? width;
+    int? height;
+    var orientation = 1;
     while (offset < bytes.length) {
       if (bytes[offset++] != 0xff) {
         throw DecodingException('invalid JPEG marker');
@@ -187,9 +270,7 @@ final class _ImageProbe {
       }
       requireBytes(offset, 1);
       final marker = bytes[offset++];
-      if (marker == 0xd9 || marker == 0xda) {
-        throw DecodingException('JPEG has no frame header');
-      }
+      if (marker == 0xd9 || marker == 0xda) break;
       if (marker == 0x01 || (marker >= 0xd0 && marker <= 0xd7)) continue;
       final length = u16be(offset);
       if (length < 2) throw DecodingException('invalid JPEG segment length');
@@ -199,16 +280,26 @@ final class _ImageProbe {
           (marker >= 0xc9 && marker <= 0xcb) ||
           (marker >= 0xcd && marker <= 0xcf)) {
         if (length < 8) throw DecodingException('invalid JPEG frame header');
-        return header(
-          ImageFormatEnum.Jpeg,
-          u16be(offset + 5),
-          u16be(offset + 3),
-          1,
-        );
+        width ??= u16be(offset + 5);
+        height ??= u16be(offset + 3);
+      } else if (marker == 0xe1 &&
+          length > 8 &&
+          matches(const [0x45, 0x78, 0x69, 0x66, 0, 0], offset + 2)) {
+        // zune-jpeg uses the last recognized Exif APP1 segment before SOS.
+        orientation = exifOrientation(offset + 8, length - 8);
       }
       offset += length;
     }
-    throw DecodingException('incomplete JPEG header');
+    if (width == null || height == null) {
+      throw DecodingException('JPEG has no frame header');
+    }
+    return header(
+      ImageFormatEnum.Jpeg,
+      width,
+      height,
+      1,
+      orientation: orientation,
+    );
   }
 
   int skipGifSubBlocks(int offset) {
@@ -277,6 +368,8 @@ final class _ImageProbe {
     var animated = false;
     var hasAnimationControl = false;
     var hasStillImage = false;
+    var hasExif = false;
+    var orientation = 1;
     var frames = 0;
 
     while (offset < end) {
@@ -317,6 +410,14 @@ final class _ImageProbe {
               (bytes[data + 3] << 2) +
               ((bytes[data + 4] & 0x0f) << 10);
           hasStillImage = true;
+        case 'EXIF':
+          // The native WebP decoder reads metadata only in VP8X containers
+          // and keeps the first occurrence. Unlike JPEG, its payload is TIFF
+          // directly, without an Exif signature prefix.
+          if (hasExtendedHeader && !hasExif) {
+            orientation = exifOrientation(data, length);
+            hasExif = true;
+          }
         case 'ANIM':
           if (length < 6) throw DecodingException('invalid WebP animation');
           hasAnimationControl = true;
@@ -338,6 +439,12 @@ final class _ImageProbe {
     } else if (!hasStillImage || frames != 0 || hasAnimationControl) {
       throw DecodingException('WebP has no still image');
     }
-    return header(ImageFormatEnum.WebP, width, height, animated ? frames : 1);
+    return header(
+      ImageFormatEnum.WebP,
+      width,
+      height,
+      animated ? frames : 1,
+      orientation: orientation,
+    );
   }
 }

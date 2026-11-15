@@ -86,8 +86,9 @@ final class Pixer {
   ///
   /// Supports PNG, JPEG, GIF, and WebP. This validates container structure,
   /// not compressed pixel data; [Pixer.fromMemory] performs full decoding.
-  /// Dimensions are the encoded canvas dimensions; unlike [Pixer.fromMemory],
-  /// this helper does not apply EXIF orientation.
+  /// Dimensions account for EXIF orientation, matching [Pixer.fromMemory].
+  /// The returned orientation also identifies mirrors and rotations which do
+  /// not exchange the dimensions. Missing or malformed EXIF is treated as 1.
   /// Throws [UnsupportedFormatException] for other formats,
   /// [DecodingException] for malformed headers, or
   /// [InvalidDimensionsException] for zero dimensions.
